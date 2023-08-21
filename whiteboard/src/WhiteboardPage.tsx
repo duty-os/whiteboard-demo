@@ -42,7 +42,6 @@ import InviteButton from "./components/InviteButton";
 import ExitButtonRoom from "./components/ExitButtonRoom";
 import {Identity} from "./IndexPage";
 import OssDropUpload from "@netless/oss-drop-upload";
-import {pptData} from "./taskUuids";
 import {PPTDataType} from "@netless/oss-upload-manager";
 import {v4 as uuidv4} from "uuid";
 import moment from "moment";
@@ -58,8 +57,8 @@ import { withTranslation, WithTranslation } from "react-i18next";
 import FloatLink from "./FloatLink";
 import { SlidePrefetch } from "@netless/slide-prefetch";
 import { WindowManager, WindowManagerWrapper } from "@netless/window-manager";
-import { WhitePPTPlugin, Player } from "@netless/ppt-plugin";
 import { AppsButton } from "./AppsButton";
+import { ProjectorDisplayer, ProjectorError, ProjectorPlugin } from "@netless/projector-plugin"
 
 export type WhiteboardPageStates = {
     phase: RoomPhase;
@@ -69,7 +68,7 @@ export type WhiteboardPageStates = {
     mode?: ViewMode;
     whiteboardLayerDownRef?: HTMLDivElement;
     roomController?: ViewMode;
-    pptPlugin?: WhitePPTPlugin;
+    projectorPlugin?: ProjectorPlugin;
     windowManager?: WindowManager;
 };
 export type WhiteboardPageProps = RouteComponentProps<{
@@ -99,6 +98,26 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
 
     public async componentDidMount(): Promise<void> {
         await this.startJoinRoom();
+        await this.initProjectPlugin();
+    }
+
+    private async initProjectPlugin(): Promise<void> {
+        if (!this.state.room) {
+            return;
+        }
+        const projectorPlugin =await ProjectorPlugin.getInstance(this.state.room, {
+            logger: {
+                info: console.log,
+                error: console.error,
+                warn: console.warn,
+            },
+            callback: {
+                errorCallback: (e: ProjectorError) => { console.log(e) },
+                onSlideRendered: (uuid: string, index: number) => { console.log(uuid, index) }
+            },
+        });
+        (window as any).projectorPlugin = projectorPlugin;
+        this.setState({ projectorPlugin })
     }
 
     public componentWillUnmount() {
@@ -138,7 +157,7 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                 };
                 const docs = (room.state.globalState as any).docs;
                 if (docs && docs.length > 0) {
-                    const newDocs = [documentFile, ...docs];
+                    const newDocs = [documentFile].concat(docs);
                     room.setGlobalState({docs: newDocs});
                 } else {
                     room.setGlobalState({docs: [documentFile]});
@@ -164,8 +183,7 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                             identity: Identity.creator,
                             userId: userId,
                         },
-                        ...roomArray,
-                    ]),
+                    ].concat(roomArray))
                 );
             } else {
                 const newRoomArray = roomArray.filter(data => data.uuid !== uuid);
@@ -178,8 +196,7 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                             identity: Identity.creator,
                             userId: userId,
                         },
-                        ...newRoomArray,
-                    ]),
+                    ].concat(newRoomArray)),
                 );
             }
         } else {
@@ -231,16 +248,15 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                     appIdentifier: netlessToken.appIdentifier,
                     plugins: plugins,
                     region,
-                    preloadDynamicPPT: true,
+                    useMobXState: true,
                     deviceType: deviceType,
-                    pptParams: {
-                        useServerWrap: true,
-                    },
                 }
                 const pluginParam = {
-                    wrappedComponents: [WindowManagerWrapper, Player] as any[],
-                    invisiblePlugins: [WindowManager, WhitePPTPlugin] as any[],
-                }
+                    wrappedComponents: [WindowManagerWrapper, ProjectorDisplayer] as any[],
+                    invisiblePlugins: [WindowManager, ProjectorPlugin] as any[],
+                };
+                (window as any).ProjectorDisplayer = ProjectorDisplayer;
+                (window as any).ProjectorPlugin = ProjectorPlugin;
                 if (h5Url) {
                     pluginParam.wrappedComponents.push(IframeWrapper);
                     pluginParam.invisiblePlugins.push(IframeBridge);
@@ -252,6 +268,7 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                 const cursorName = localStorage.getItem("userName");
                 const cursorAdapter = new CursorTool();
                 const room = await whiteWebSdk.joinRoom({
+                        uid: 'hr',
                         uuid: uuid,
                         roomToken: roomToken,
                         cursorAdapter: cursorAdapter,
@@ -279,6 +296,7 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                             changeToArrow: "a",
                             changeToHand: "h",
                         },
+                        invisiblePlugins: [ProjectorPlugin]
                     },
                     {
                         onPhaseChanged: phase => {
@@ -297,15 +315,6 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                         },
                     });
                 cursorAdapter.setRoom(room);
-                room.setMemberState({
-                    pencilOptions: {
-                        disableBezier: false,
-                        sparseHump: 1.0,
-                        sparseWidth: 1.0,
-                        enableDrawPoint: false
-                    }
-                });
-                this.setDefaultPptData(pptData, room);
                 if (room.state.broadcastState) {
                     this.setState({mode: room.state.broadcastState.mode})
                 }
@@ -325,36 +334,11 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                 (window as any).plugin = plugin;
 
                 this.slidePrefetch.listen(room);
-                await this.handlePPTPlugin(room);
             }
         } catch (error) {
             message.error(String(error));
             console.trace(error);
         }
-    }
-
-    private handlePPTPlugin = async (room: Room): Promise<void> => {
-
-        let bridge = room.getInvisiblePlugin(WhitePPTPlugin.kind) as WhitePPTPlugin;
-        if (!bridge) {
-
-            await room.createInvisiblePlugin(WhitePPTPlugin, {});
-        }
-
-        bridge = room.getInvisiblePlugin(WhitePPTPlugin.kind) as WhitePPTPlugin;
-
-        bridge.setupConfig({
-            assetsDomain: "https://convertcdn.netless.link",
-            sdkToken: netlessToken.sdkToken,
-            loadConfig: {
-                scheme: "https",
-                useServerWrap: true,
-            },
-        });
-        this.setState({
-            pptPlugin: bridge,
-        });
-        WhitePPTPlugin.eventHub.on(WhitePPTPlugin.EVENTS.ERROR, e => console.log(e));
     }
 
     private handleEnableH5 = async (room: Room, h5Url: string, dir?: string): Promise<void> => {
@@ -392,7 +376,6 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
         (window as any).bridge = bridge;
     }
 
-
     private createH5Scenes = (pageNumber: number) => {
         return new Array(pageNumber).fill(1).map((_, index) => ({ name: `${index + 1}` }));
     }
@@ -417,7 +400,7 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
     }
 
     public render(): React.ReactNode {
-        const {pptPlugin, room, isMenuVisible, isFileOpen, phase, whiteboardLayerDownRef} = this.state;
+        const { room, isMenuVisible, isFileOpen, phase, whiteboardLayerDownRef, projectorPlugin } = this.state;
         const { identity, uuid, userId, region } = this.props.match.params;
         let ossConfig = { ...ossConfigObj };
         if (region !== "cn-hz") {
@@ -444,13 +427,14 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                             <ToolBox i18nLanguage={i18n.language} room={room} customerComponent={
                                 [
                                     <OssUploadButton oss={ossConfig}
-                                                     pptPlugin={pptPlugin}
+                                                     // pptPlugin={pptPlugin}
                                                      appIdentifier={netlessToken.appIdentifier}
                                                      sdkToken={netlessToken.sdkToken}
                                                      room={room}
                                                      region={region}
                                                      i18nLanguage={i18n.language}
-                                                     whiteboardRef={whiteboardLayerDownRef} />,
+                                                     projectPlugin={projectorPlugin}
+                                                     whiteboardRef={whiteboardLayerDownRef}/>,
                                     <AppsButton manager={this.state.windowManager} />,
                                 ]
                             }/>
@@ -484,7 +468,7 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                         </div>
                         <div className="page-controller-box">
                             <div className="page-controller-mid-box">
-                                <PageController pptPlugin={pptPlugin} usePPTPlugin={true} room={room}/>
+                                <PageController pptPlugin={projectorPlugin} usePPTPlugin={true} room={room}/>
                                 <Tooltip placement="top" title={"Page preview"}>
                                     <div className="page-preview-cell" onClick={() => this.handlePreviewState(true)}>
                                         <img src={pages} alt={"pages"}/>
@@ -493,7 +477,7 @@ class WhiteboardPage extends React.Component<WhiteboardPageProps & WithTranslati
                             </div>
                         </div>
                         <PreviewController handlePreviewState={this.handlePreviewState} isVisible={isMenuVisible}
-                                           room={room}/>
+                                           room={room} projectorPlugin={projectorPlugin} />
                         <DocsCenter handleDocCenterState={this.handleDocCenterState}
                             isFileOpen={isFileOpen}
                             room={room}

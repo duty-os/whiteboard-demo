@@ -1,7 +1,6 @@
 import * as React from "react";
 import { message, Popover, Upload, Switch } from "antd";
 import * as OSS from "ali-oss";
-import type { WhitePPTPlugin } from "@netless/ppt-plugin";
 import { PPTProgressPhase, UploadManager } from "@netless/oss-upload-manager";
 import TopLoadingBar from "@netless/loading-bar";
 import "./index.less";
@@ -14,6 +13,9 @@ import * as fileTransImg from "./image/file-trans-img.svg";
 import * as Video from "./image/video.svg";
 import * as Audio from "./image/audio.svg";
 import { v4 as uuidv4 } from "uuid";
+import { ProjectorPlugin } from "@netless/projector-plugin";
+import { createProjectorDynamicTask, utilConvertFinish } from "whiteboard/src/apiMiddleware";
+
 type OSSConfigObjType = {
     accessKeyId: string;
     accessKeySecret: string;
@@ -51,7 +53,7 @@ export type OssUploadButtonProps = {
     i18nLanguage?: string;
     region?: string;
     enables?: UploadType[];
-    pptPlugin?: WhitePPTPlugin;
+    projectPlugin?: ProjectorPlugin;
 };
 
 export default class OssUploadButton extends React.Component<OssUploadButtonProps, OssUploadButtonStates> {
@@ -94,22 +96,19 @@ export default class OssUploadButton extends React.Component<OssUploadButtonProp
     }
 
     private uploadPPTByPlugin = async (event: any): Promise<void> => {
-        if (this.props.pptPlugin) {
+        if (this.props.projectPlugin) {
             const { uuid } = this.props.room;
             const uploadManager = new UploadManager(this.client, this.props.room, this.props.apiOrigin, this.props.region);
             const pptUrl = await uploadManager.uploadFile(event.file, this.props.oss.folder, uuid, this.progress);
-            const taskUUID = await this.props.pptPlugin?.convertPPT({
-                url: pptUrl,
-                onProgressUpdated: async (progress: number) => {
-                    console.log(progress);
-                    this.progress(PPTProgressPhase.Converting, progress / 100);
-                    if (progress >= 100) {
-                        this.progress(PPTProgressPhase.Stop, 1);
-                        await this.props.pptPlugin?.loadPPT(taskUUID);
-                        await this.props.pptPlugin?.gotoSlide(0);
-                    }
-                }
+            const { uuid: taskId } = await createProjectorDynamicTask(pptUrl, this.props.sdkToken, 'dynamic');
+            const { prefix } = await utilConvertFinish(taskId, this.props.sdkToken, (progress: number) => {
+                this.progress(PPTProgressPhase.Converting, progress);
             });
+            this.progress(PPTProgressPhase.Stop, 1);
+            await this.props.projectPlugin.createSlide({
+                uuid: taskId,
+                prefix,
+            })
         }
     }
 
