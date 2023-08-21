@@ -100,6 +100,7 @@ export default class Index extends Component<DocsCenterProps, DocsCenterState> {
         const scenes = room.entireScenes();
         const current = this.getCurrentScenePath();
         let { docs } = this.state;
+        docs = JSON.parse(JSON.stringify(docs));
         for (const doc of docs) {
             doc.active = this.getScenePath(doc.id) === current;
         }

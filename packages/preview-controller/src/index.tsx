@@ -5,17 +5,20 @@ import close from "./image/close.svg";
 import addPage from "./image/add-page.svg";
 import "./index.less";
 import deleteIcon from "./image/delete.svg";
+import { ProjectorPlugin } from "@netless/projector-plugin"
 
 export type PreviewControllerState = {
     isFocus: boolean;
     hoverCellIndex: number | null;
     scenesCount: number;
+    slidePreviewUrl: string[];
 };
 
 export type PreviewControllerProps = {
     room: Room;
     handlePreviewState: (state: boolean) => void;
     isVisible: boolean;
+    projectorPlugin?: ProjectorPlugin;
 };
 
 class PreviewController extends React.Component<PreviewControllerProps, PreviewControllerState> {
@@ -26,12 +29,17 @@ class PreviewController extends React.Component<PreviewControllerProps, PreviewC
             isFocus: false,
             hoverCellIndex: null,
             scenesCount: 0,
+            slidePreviewUrl: [],
         };
     }
 
     private setScenePath = (newActiveIndex: number) => {
-        const {room} = this.props;
-        room.setSceneIndex(newActiveIndex);
+        if (this.props.projectorPlugin) {
+            this.props.projectorPlugin.renderSlidePage(newActiveIndex + 1);
+        } else {
+            const {room} = this.props;
+            room.setSceneIndex(newActiveIndex);
+        }
     }
     private pathName = (path: string): string => {
         const cells = path.split("/");
@@ -50,11 +58,26 @@ class PreviewController extends React.Component<PreviewControllerProps, PreviewC
         });
     }
 
+    public componentDidUpdate(prevProps: Readonly<PreviewControllerProps>) {
+        if (prevProps.projectorPlugin === this.props.projectorPlugin) {
+            return;
+        }
+        if (!this.props.projectorPlugin) {
+            return;
+        }
+        const sceneDir = this.props.room.state.sceneState.scenePath.split("/");
+        this.props.projectorPlugin.listSlidePreviews(sceneDir[2]).then(slide => {
+            this.setState({ slidePreviewUrl: slide })
+        })
+    }
+
     private renderPreviewCells = (scenes: ReadonlyArray<WhiteScene>, activeIndex: number, sceneDir: any): React.ReactNode => {
         const {isVisible} = this.props;
+        const { slidePreviewUrl } = this.state;
         const nodes: React.ReactNode = scenes.map((scene, index) => {
             const isActive = index === activeIndex;
             const scenePath = sceneDir.concat(scene.name).join("/");
+            const slidePreview = slidePreviewUrl[index];
             return (
                 <div key={`key-${scenePath}`} className="page-out-box">
                     <div
@@ -65,6 +88,7 @@ class PreviewController extends React.Component<PreviewControllerProps, PreviewC
                         <PageImage
                             room={this.props.room}
                             path={scenePath}
+                            imageUrl={slidePreview}
                         />
                     </div>
                     <div className="page-box-under">
@@ -143,7 +167,7 @@ class PreviewController extends React.Component<PreviewControllerProps, PreviewC
     }
 }
 
-export type PageImageProps = { path: string, room: Room };
+export type PageImageProps = { path: string, room: Room, imageUrl?: string };
 
 class PageImage extends React.Component<PageImageProps, {}> {
 
@@ -151,6 +175,9 @@ class PageImage extends React.Component<PageImageProps, {}> {
 
     public componentDidMount(): void {
         const { room } = this.props;
+        if (this.props.imageUrl) {
+            return;
+        }
         window.setTimeout(() => {
             this.syncPreview();
         });
@@ -162,13 +189,27 @@ class PageImage extends React.Component<PageImageProps, {}> {
     }
 
     public componentDidUpdate(prevProps: PageImageProps): void {
-        if (prevProps.path !== this.props.path) {
+        if (prevProps.path !== this.props.path && !this.props.imageUrl) {
             this.syncPreview();
+        }
+        if (prevProps.imageUrl !== this.props.imageUrl) {
+            this.render();
         }
     }
 
-    public render(): React.ReactNode {
+    public renderWhiteboard() {
         return <div className="ppt-image" ref={this.ref}/>;
+    }
+
+    public renderImage() {
+        return <img className="ppt-image" src={this.props.imageUrl} style={{width: '208px', height:'156px' }} />;
+    }
+
+    public render(): React.ReactNode {
+        if (this.props.imageUrl) {
+            return this.renderImage();
+        }
+        return this.renderWhiteboard();
     }
 
     private syncPreview(): void {
